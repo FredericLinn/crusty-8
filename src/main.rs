@@ -250,25 +250,31 @@ impl Cpu {
             (_, _, _, _) => (),
         }
     }
+}
 
-    fn is_pressed(&mut self, window: &Window, hex_key: u8) -> bool {
+pub trait HexToKey{
+    fn is_hex_pressed(&self, hex_key: u8) -> bool;
+}
+
+impl HexToKey for Window {
+    fn is_hex_pressed(&self, hex_key: u8) -> bool {
         match hex_key {
-            0x0 => window.is_key_down(Key::Key1),
-            0x1 => window.is_key_down(Key::Key2),
-            0x2 => window.is_key_down(Key::Key3),
-            0x3 => window.is_key_down(Key::Key4),
-            0x4 => window.is_key_down(Key::Q),
-            0x5 => window.is_key_down(Key::W),
-            0x6 => window.is_key_down(Key::E),
-            0x7 => window.is_key_down(Key::R),
-            0x8 => window.is_key_down(Key::A),
-            0x9 => window.is_key_down(Key::S),
-            0xA => window.is_key_down(Key::D),
-            0xB => window.is_key_down(Key::F),
-            0xC => window.is_key_down(Key::Y), // Assume QWERTZ
-            0xD => window.is_key_down(Key::X),
-            0xE => window.is_key_down(Key::C),
-            0xF => window.is_key_down(Key::V),
+            0x0 => self.is_key_down(Key::Key1),
+            0x1 => self.is_key_down(Key::Key2),
+            0x2 => self.is_key_down(Key::Key3),
+            0x3 => self.is_key_down(Key::Key4),
+            0x4 => self.is_key_down(Key::Q),
+            0x5 => self.is_key_down(Key::W),
+            0x6 => self.is_key_down(Key::E),
+            0x7 => self.is_key_down(Key::R),
+            0x8 => self.is_key_down(Key::A),
+            0x9 => self.is_key_down(Key::S),
+            0xA => self.is_key_down(Key::D),
+            0xB => self.is_key_down(Key::F),
+            0xC => self.is_key_down(Key::Y), // assumes QWERTZ
+            0xD => self.is_key_down(Key::X),
+            0xE => self.is_key_down(Key::C),
+            0xF => self.is_key_down(Key::V),
             _ => false,
         }
     }
@@ -356,5 +362,6 @@ fn main() {
         window
             .update_with_buffer(&cpu.display.framebuffer, width, height)
             .unwrap();
+        if window.is_hex_pressed(0x0) { println!("It works!") };
     }
 }
