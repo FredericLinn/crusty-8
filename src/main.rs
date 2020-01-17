@@ -1,5 +1,7 @@
 use minifb::{Key, Scale, Window, WindowOptions};
 use rand::{thread_rng, Rng};
+use std::fs::File;
+use std::io::prelude::*;
 
 #[allow(dead_code)]
 struct Chip8 {
@@ -72,6 +74,7 @@ impl Chip8 {
     }
 
     fn process_opcode(&mut self, opcode: u16) {
+        println!{"Processing: {:#02x}", opcode};
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         let vx = self.v[x];
@@ -83,6 +86,8 @@ impl Chip8 {
         // Pre-emptively increment the program counter,
         // jump instructions will overwrite the value anyway.
         self.pc += 2;
+
+        if self.dt > 0 { self.dt -= 1 };
 
         let nibbles = Chip8::split_opcode(opcode);
 
@@ -124,7 +129,10 @@ impl Chip8 {
             (0x6, _, _, _) => self.v[x] = nn,
 
             // 7XNN Add the value NN to register VX
-            (0x7, _, _, _) => self.v[x] += nn,
+            (0x7, _, _, _) => {
+                let (val, _) = vx.overflowing_add(nn);
+                self.v[x] = val;
+            },
 
             // 8XY0 Store the value of register VY in register VX
             (0x8, _, _, 0x0) => self.v[x] = vy,
@@ -142,21 +150,19 @@ impl Chip8 {
             // Set VF to 01 if a carry occurs
             // Set VF to 00 if a carry does not occur
             (0x8, _, _, 0x4) => {
-                let (_, overflow) = self.v[x].overflowing_add(vy);
-                if overflow {
-                    self.v[x] = 1
-                };
-            }
+                let (sum, overflow) = vx.overflowing_add(vy);
+                self.v[x] = sum;
+                self.v[0xF] = if overflow { 1 } else { 0 };
+            },
 
             // 8XY5 Subtract the value of register VY from register VX
             // Set VF to 00 if a borrow occurs
             // Set VF to 01 if a borrow does not occur
             (0x8, _, _, 0x5) => {
-                let (_, overflow) = self.v[x].overflowing_sub(vy);
-                if overflow {
-                    self.v[x] = 0
-                };
-            }
+                let (sum, overflow) = vx.overflowing_sub(vy);
+                self.v[x] = sum;
+                self.v[0xF] = if overflow { 0 } else { 1 };
+            },
 
             // 8XY6 Store the value of register VY shifted right one bit in register VX
             // Set register VF to the least significant bit prior to the shift
@@ -172,9 +178,7 @@ impl Chip8 {
             (0x8, _, _, 0x7) => {
                 let (val, overflow) = vy.overflowing_sub(vx);
                 self.v[x] = val;
-                if overflow {
-                    self.v[0xF] = 0
-                };
+                self.v[0xF] = if overflow { 0 } else { 1 }
             }
 
             // 8XYE Store the value of register VY shifted left one bit in register VX
@@ -196,6 +200,7 @@ impl Chip8 {
 
             // CXNN Set VX to a random number with a mask of NN
             (0xC, _, _, _) => {
+                println!("Created random number");
                 let mut rng = thread_rng();
                 let rn: u8 = rng.gen();
                 self.v[x] = rn & nn;
@@ -203,7 +208,28 @@ impl Chip8 {
 
             // DXYN Draw a sprite at position VX, VY with N bytes of sprite data starting at the address stored in I
             // Set VF to 01 if any set pixels are changed to unset, and 00 otherwise
-            (0xD, _, _, _) => self.io.draw(),
+            (0xD, _, _, _) => {
+                let mut collision = false;
+                let range = (self.i as usize)..(self.i + n as u16) as usize;
+                let sprite_data: &[u8] = &self.memory[range];
+                // get index = y * WIDTH + x
+                for (i, current_byte) in sprite_data.iter().enumerate() {
+                    for j in 0..8 {
+                        let current_bit = current_byte >> (7 - j) & 0x01;
+                        if current_bit == 1 {
+                            let x = vx as usize + j;
+                            let y = vy as usize + i;
+
+                            let already_set = self.io.set_pixel(x, y);
+
+                            if already_set { collision = true};
+                        }
+                    }
+                }
+                self.io.window.update_with_buffer(&self.io.framebuffer, WIDTH, HEIGHT).unwrap();
+
+                if collision { self.v[0xF] = 1 };
+            },
 
             // EX9E Skip the following instruction if the key corresponding to the hex value currently stored in register VX is pressed
             (0xE, _, _, 0xE) => self.pc += if self.io.is_key_pressed(vx) { 2 } else { 0 },
@@ -261,6 +287,7 @@ impl Chip8 {
                 for r in 0..=x {
                     self.v[r] = self.memory[(self.i + r as u16) as usize];
                 }
+                self.i += x as u16 + 1;
             }
 
             // Gotta catch 'em all!
@@ -322,12 +349,26 @@ impl Io {
     }
 
     fn setup(&mut self) {
-        self.window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
+        self.window.limit_update_rate(Some(std::time::Duration::from_micros(1660))); // 600FPS
     }
 
     fn cls(&mut self) {
         self.framebuffer = [0; 64 * 32];
         self.draw();
+    }
+
+    fn set_pixel(&mut self, x: usize, y: usize) -> bool {
+        let index = y * WIDTH + x;
+
+        if index >= 64 * 32 { return false};
+
+        if self.framebuffer[index] == 0xFFFF_FFFF {
+            self.framebuffer[index] = 0;
+            true
+        } else {
+            self.framebuffer[index] = 0xFFFF_FFFF;
+            false
+        }
     }
 
     fn draw(&mut self) {
@@ -378,28 +419,25 @@ const FONT: [u8; 16 * 5] = [
 ];
 
 fn main() {
-    // Create Chip-8 instance
-    // Initialize all the parts
-    // Load ROM
-    // Start loop
-    // Get Keyboard input
-    // Draw screen
-
     let mut chip8 = Chip8::new();
     chip8.reset();
     chip8.io.setup();
-   
+
+    // load rom
+    let f = File::open("./roms/roms/demos/Trip8 Demo (2008) [Revival Studios].ch8").unwrap();
+    // let f = File::open("./roms/roms/games/Breakout (Brix hack) [David Winter, 1997].ch8").unwrap();
+    // let f = File::open("./roms/roms/games/Breakout [Carmelo Cortez, 1979].ch8").unwrap();
+    // let f = File::open("./roms/roms/games/Brix [Andreas Gustafsson, 1990].ch8").unwrap();
+    // let f = File::open("./roms/PONG2").unwrap();
+
+    for (i, byte) in f.bytes().enumerate() {
+        let index = 0x200 + i;
+        chip8.memory[index] = byte.unwrap();
+    }
+
     while chip8.io.window.is_open() && !chip8.io.window.is_key_down(Key::Escape) {
-        for i in chip8.io.framebuffer.iter_mut() {
-            *i = 0xFFFF_FFFF; // write something more funny here!
-        }
         chip8.io.window.update();
         chip8.io.set_keys();
         chip8.execute_cycle();
-        if chip8.io.keys[0] {
-            println!("pressed");
-        } else {
-            println!("UNpressed");
-        }
     }
 }
