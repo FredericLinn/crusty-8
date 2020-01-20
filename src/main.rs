@@ -13,16 +13,16 @@ fn main() {
     let f = File::open("./roms/BRIX").unwrap();
    
     chip8.load_rom(&f);
+    let mut buf = vec![0u32; 64 * 32];
 
     while chip8.io.window.is_open() && !chip8.io.window.is_key_down(minifb::Key::Escape) {
-        let mut buf = vec![0u32; 32 * 64];
 
         for (i, pixel) in buf.iter_mut().enumerate() {
-            *pixel = if chip8.io.framebuffer[i] {0xFF_FF_FF_FF} else {0};
+            *pixel = if chip8.io.framebuffer[i] { 0xFF_FF_FF_FF } else { 0 };
         }
 
         chip8.io.draw(&buf);
         chip8.io.set_keys();
-        chip8.execute_cycle();
+        chip8.tick();
     }
 }

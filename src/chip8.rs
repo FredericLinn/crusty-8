@@ -76,8 +76,7 @@ impl Chip8 {
         self.memory[0..(FONT.len())].copy_from_slice(&FONT);
     }
 
-
-    pub fn execute_cycle(&mut self) {
+    pub fn tick(&mut self) {
         let opcode =
             (self.memory[self.pc as usize] as u16) << 8
             | (self.memory[(self.pc + 1) as usize] as u16);
@@ -99,6 +98,7 @@ impl Chip8 {
         self.pc += 2;
 
         if self.dt > 0 { self.dt -= 1 };
+        if self.st > 0 { self.st -= 1 };
 
         let nibbles = Chip8::split_opcode(opcode);
 
@@ -218,9 +218,10 @@ impl Chip8 {
             // DXYN Draw a sprite at position VX, VY with N bytes of sprite data starting at the address stored in I
             // Set VF to 01 if any set pixels are changed to unset, and 00 otherwise
             (0xD, _, _, _) => {
+                self.v[0xF] = 0; // Never forget :(
                 let range = (self.i as usize)..(self.i + n as u16) as usize;
                 let sprite_data: &[u8] = &self.memory[range];
-                // get index = y * WIDTH + x
+
                 for (i, current_byte) in sprite_data.iter().enumerate() {
                     for j in 0..8 {
                         let current_bit = current_byte >> (7 - j) & 0x01;
@@ -594,10 +595,44 @@ mod test {
     fn instruction_dxyn() {
         assert_eq!(1, 2);
     }
-// EX9E 	Skip the following instruction if the key corresponding to the hex value currently stored in register VX is pressed
-// EXA1 	Skip the following instruction if the key corresponding to the hex value currently stored in register VX is not pressed
-// FX07 	Store the current value of the delay timer in register VX
+
+    #[test]
+    fn instruction_ex9e() {
+        let mut c = Chip8::new();
+        c.reset();
+        c.io.keys[0] = true;
+        c.process_opcode(0xE09E);
+        assert_eq!(0x204, c.pc); // Jump
+        c.io.keys[0] = false;
+        c.process_opcode(0xE09E);
+        assert_eq!(0x206, c.pc); // No jump
+    }
+
+    #[test]
+    fn instruction_exa1() {
+        let mut c = Chip8::new();
+        c.reset();
+        c.io.keys[0] = true;
+        c.process_opcode(0xE0A1);
+        assert_eq!(0x202, c.pc); // No jump
+        c.io.keys[0] = false;
+        c.process_opcode(0xE0A1);
+        assert_eq!(0x206, c.pc); // Jump
+    }
+
+    #[test]
+    fn instruction_fx07() {
+        let mut c = Chip8::new();
+        c.reset();
+        c.dt = 0xFF;
+        c.process_opcode(0xF007);
+        assert_eq!(0xFF - 1, c.v[0]); // Already ticked once
+    }
 // FX0A 	Wait for a keypress and store the result in register VX
+    #[test]
+    fn instruction_fx0a() {
+        assert_eq!(1, 2);
+    }
     #[test]
     fn instruction_fx15() {
         let mut c = Chip8::new();
@@ -654,10 +689,46 @@ mod test {
         assert_eq!(5, c.memory[index + 1]);
         assert_eq!(5, c.memory[index + 2]);
     }
-// FX55 	Store the values of registers V0 to VX inclusive in memory starting at address I
-// I is set to I + X + 1 after operation
-// FX65 	Fill registers V0 to VX inclusive with the values stored in memory starting at address I
-// I is set to I + X + 1 after operation
 
+    #[test]
+    fn instruction_fx55() {
+        let mut c = Chip8::new();
+        c.reset();
 
+        let base_address = 0x200;
+        c.i = base_address;
+
+        for i in 0..=0xF {
+            c.v[i] = 0xEE;
+        }
+
+        c.process_opcode(0xfF55);
+
+        for i in 0..=0xF {
+            assert_eq!(0xEE, c.memory[(base_address + i) as usize]);
+        }
+
+        assert_eq!(base_address + 0xF + 1, c.i);
+    }
+
+    #[test]
+    fn instruction_fx65() {
+        let mut c = Chip8::new();
+        c.reset();
+
+        let base_address = 0x200;
+        c.i = base_address;
+
+        for i in 0..=0xF {
+            c.memory[(base_address + i) as usize] = 0xFF;
+        }
+
+        c.process_opcode(0xfF65);
+
+        for i in 0..=0xF {
+            assert_eq!(0xFF, c.v[i]);
+        }
+
+        assert_eq!(base_address + 0xF + 1, c.i);
+    }
 }
