@@ -3,26 +3,32 @@ use std::fs::File;
 mod chip8;
 mod io;
 use chip8::Chip8;
+use io::Io;
 
 fn main() {
-    let mut chip8 = Chip8::new();
-    chip8.reset();
+    // TODO: parse command line arguments: path_to_rom, screensettings
 
-    // let f = File::open("./roms/roms/demos/Trip8 Demo (2008) [Revival Studios].ch8").unwrap();
-    // let f = File::open("./roms/PONG2").unwrap();
-    let f = File::open("./roms/BRIX").unwrap();
-   
+    // let path = "./roms/roms/demos/Trip8 Demo (2008) [Revival Studios].ch8";
+    // let path = "./roms/roms/demos/Trip8 Demo (2008) [Revival Studios].ch8";
+    // let path = "./roms/PONG2";
+    let path = "./roms/BRIX";
+
+    let f = File::open(path).unwrap();
+
+    let mut chip8 = Chip8::new_with_state();
     chip8.load_rom(&f);
-    let mut buf = vec![0u32; 64 * 32];
+    let mut io = Io::new();
+    io.setup();
 
-    while chip8.io.window.is_open() && !chip8.io.window.is_key_down(minifb::Key::Escape) {
+    while io.window.is_open() && !io.window.is_key_down(minifb::Key::Escape) {
+        // if chip8.should_draw { io.draw(&chip8.framebuffer) } else { io.window.update() }
 
-        for (i, pixel) in buf.iter_mut().enumerate() {
-            *pixel = if chip8.io.framebuffer[i] { 0xFF_FF_FF_FF } else { 0 };
-        }
+        // Always draw with buffer, even though technically the draw instruction was not called.
+        // Makes for a more fluent experience.
+        io.draw(&chip8.framebuffer);
 
-        chip8.io.draw(&buf);
-        chip8.io.set_keys();
+        // Set the keys after updating the window to get the new input.
+        io.set_keys(&mut chip8.keys);
         chip8.tick();
     }
 }

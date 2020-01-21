@@ -3,7 +3,7 @@ use rand::Rng;
 use std::fs::File;
 use std::io::prelude::*;
 
-use crate::io::{Io, WIDTH, HEIGHT};
+use crate::io::{WIDTH, HEIGHT};
 
 pub struct Chip8 {
     // program counter,
@@ -22,36 +22,46 @@ pub struct Chip8 {
     dt: u8,
     // sound timer
     st: u8,
-    // Input / Output
-    pub io: Io,
+    // keyboard
+    pub keys: [bool; 16],
+    // display
+    pub framebuffer: [bool; WIDTH * HEIGHT],
+    // draw flag
+    pub should_draw: bool,
+
 }
 
 impl Chip8 {
-    pub fn new() -> Chip8 {
+    pub fn new_with_state() -> Chip8 {
         Chip8 {
-            pc: 0,
+            pc: 0x200,
             i: 0,
-            memory: [0; 4096],
             v: [0; 16],
             stack: [0; 16],
             sp: 0,
             dt: 0,
             st: 0,
-            io: Io::new(),
+            memory: Chip8::init_memory(),
+            keys: [false; 16],
+            framebuffer: [false; WIDTH * HEIGHT],
+            should_draw: false,
         }
     }
 
-    pub fn reset(&mut self) {
-        self.pc = 0x200;
-        self.i = 0;
-        self.init_memory();
-        self.v = [0; 16];
-        self.stack = [0; 16];
-        self.sp = 0;
-        self.dt = 0;
-        self.st = 0;
-        self.io.setup();
-        self.io.cls();
+    fn init_memory() -> [u8; 4096] {
+        let mut memory = [0; 4096];
+        memory[0..(FONT.len())].copy_from_slice(&FONT);
+        memory
+    }
+
+    // Split the two bytes of an opcode into four nibbles.
+    fn decode(opcode: u16) -> (u8, u8, u8, u8) {
+        (
+            ((opcode & 0xF000) >> 12) as u8,
+            ((opcode & 0x0F00) >> 8) as u8,
+            ((opcode & 0x00F0) >> 4) as u8,
+            (opcode & 0x000F) as u8,
+        )
     }
 
     pub fn load_rom(&mut self, f: &File) {
@@ -61,30 +71,15 @@ impl Chip8 {
         }
     }
 
-    // Split the two bytes of an opcode into four nibbles.
-    fn split_opcode(opcode: u16) -> (u8, u8, u8, u8) {
-        (
-            ((opcode & 0xF000) >> 12) as u8,
-            ((opcode & 0x0F00) >> 8) as u8,
-            ((opcode & 0x00F0) >> 4) as u8,
-            (opcode & 0x000F) as u8,
-        )
-    }
-
-    fn init_memory(&mut self) {
-        self.memory = [0; 4096];
-        self.memory[0..(FONT.len())].copy_from_slice(&FONT);
-    }
-
     pub fn tick(&mut self) {
         let opcode =
             (self.memory[self.pc as usize] as u16) << 8
             | (self.memory[(self.pc + 1) as usize] as u16);
-        self.process_opcode(opcode);
+        self.execute(opcode);
     }
 
-    fn process_opcode(&mut self, opcode: u16) {
-        println!{"Processing: {:#02x}", opcode};
+    fn execute(&mut self, opcode: u16) {
+        // println!{"Processing: {:#02x}", opcode};
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         let vx = self.v[x];
@@ -97,14 +92,21 @@ impl Chip8 {
         // jump instructions will overwrite the value anyway.
         self.pc += 2;
 
+        self.should_draw = false;
+
         if self.dt > 0 { self.dt -= 1 };
         if self.st > 0 { self.st -= 1 };
 
-        let nibbles = Chip8::split_opcode(opcode);
+        let nibbles = Chip8::decode(opcode);
 
         match nibbles {
             // 00E0 Clear the screen
-            (0x0, 0x0, 0xE, 0x0) => self.io.cls(),
+            (0x0, 0x0, 0xE, 0x0) => {
+                for pixel in self.framebuffer.iter_mut() {
+                    *pixel = false;
+                }
+                self.should_draw = true;
+            }
 
             // 00EE Return from a subroutine
             // pop old pc form stack
@@ -231,22 +233,23 @@ impl Chip8 {
 
                             let index = y * WIDTH + x;
 
-                            let on = self.io.framebuffer[index];
+                            let on = self.framebuffer[index];
 
                             if on {
                                 self.v[0xF] = 1;
                             }
-                            self.io.framebuffer[index] = !on;
+                            self.framebuffer[index] = !on;
                         }
                     }
                 }
+                self.should_draw = true;
             },
 
             // EX9E Skip the following instruction if the key corresponding to the hex value currently stored in register VX is pressed
-            (0xE, _, _, 0xE) => self.pc += if self.io.is_key_pressed(vx) { 2 } else { 0 },
+            (0xE, _, _, 0xE) => self.pc += if self.keys[vx as usize] { 2 } else { 0 },
 
             // EXA1 Skip the following instruction if the key corresponding to the hex value currently stored in register VX is not pressed
-            (0xE, _, 0xA, 0x1) => self.pc += if !self.io.is_key_pressed(vx) { 2 } else { 0 },
+            (0xE, _, 0xA, 0x1) => self.pc += if !self.keys[vx as usize] { 2 } else { 0 },
 
             // FX07 Store the current value of the delay timer in register VX
             (0xF, _, 0x0, 0x7) => self.v[x] = self.dt,
@@ -256,9 +259,9 @@ impl Chip8 {
                 // https://github.com/ColinEberhardt/wasm-rust-chip8
                 // I love the simplicity of just subtracting from the program counter.
                 self.pc -= 2;
-                for key in 0x0..=0xF {
-                    if self.io.is_key_pressed(key) {
-                        self.v[x] = key;
+                for (key_value, key) in self.keys.iter().enumerate() {
+                    if *key {
+                        self.v[x] = key_value as u8;
                         self.pc += 2;
                     }
                 }
@@ -271,7 +274,11 @@ impl Chip8 {
             (0xF, _, 0x1, 0x8) => self.st = vx,
 
             // FX1E Add the value stored in register VX to register I
-            (0xF, _, 0x1, 0xE) => self.i += vx as u16,
+            (0xF, _, 0x1, 0xE) => {
+                let (val, overflow) = self.i.overflowing_add(vx as u16);
+                self.v[0xF] = if overflow { 1 } else { 0 };
+                self.i = val;
+            },
 
             // FX29 Set I to the memory address of the sprite data corresponding to the hexadecimal digit stored in register VX
             (0xF, _, 0x2, 0x9) => self.i = vx as u16 * 5,
@@ -332,9 +339,8 @@ mod test {
     use super::*;
 
     #[test]
-    fn reset() {
-        let mut c = Chip8::new();
-        c.reset();
+    fn init() {
+        let mut c = Chip8::new_with_state();
 
         assert_eq!(0x200, c.pc);
         assert_eq!(4096, c.memory.len());
@@ -342,189 +348,189 @@ mod test {
 
     #[test]
     fn instruction_00e0() {
-        let mut c = Chip8::new();
-        c.reset();
-        c.process_opcode(0x00E0);
-        for pixel in c.io.framebuffer.iter() {
+        let mut c = Chip8::new_with_state();
+
+        c.execute(0x00E0);
+        for pixel in c.framebuffer.iter() {
             assert_eq!(false, *pixel);
         }
     }
 
     #[test]
     fn instruction_00ee() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
 
         assert_eq!(0x200, c.pc);
         // Execute subroutine
-        c.process_opcode(0x2123);
+        c.execute(0x2123);
         assert_eq!(1, c.sp);
         assert_eq!(0x123, c.pc);
         // Execute second subroutine
-        c.process_opcode(0x2000);
+        c.execute(0x2000);
         assert_eq!(2, c.sp);
         // Return from subroutine
-        c.process_opcode(0x00EE);
+        c.execute(0x00EE);
         assert_eq!(1, c.sp);
         assert_eq!(0x125, c.pc);
         // Return from subroutine
-        c.process_opcode(0x00EE);
+        c.execute(0x00EE);
         assert_eq!(0, c.sp);
         assert_eq!(0x202, c.pc)
     }
 
     #[test]
     fn instruction_1nnn() {
-        let mut c = Chip8::new();
-        c.reset();
-        c.process_opcode(0x1123);
+        let mut c = Chip8::new_with_state();
+
+        c.execute(0x1123);
         assert_eq!(0x123, c.pc);
     }
 
     #[test]
     fn instruction_3xnn() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0x3] = 0x33;
-        c.process_opcode(0x3333);
+        c.execute(0x3333);
         assert_eq!(0x204, c.pc);
     }
 
     #[test]
     fn instruction_4xnn() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0x3] = 0x33;
-        c.process_opcode(0x4333);
+        c.execute(0x4333);
         assert_eq!(0x202, c.pc);
     }
 
     #[test]
     fn instruction_5xy0() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0x3] = 0x33;
         c.v[0x4] = 0x33;
-        c.process_opcode(0x4330);
+        c.execute(0x4330);
         assert_eq!(0x204, c.pc);
     }
 
     #[test]
     fn instruction_6xnn() {
-        let mut c = Chip8::new();
-        c.reset();
-        c.process_opcode(0x6123);
+        let mut c = Chip8::new_with_state();
+
+        c.execute(0x6123);
         assert_eq!(0x23, c.v[1]);
     }
 
     #[test]
     fn instruction_7xnn() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0x23;
-        c.process_opcode(0x7123);
+        c.execute(0x7123);
         assert_eq!(0x23 + 0x23, c.v[1]);
     }
 
     #[test]
     fn instruction_8xy0() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0x23;
         assert_eq!(0x0, c.v[0]);
-        c.process_opcode(0x8010);
+        c.execute(0x8010);
         assert_eq!(0x23, c.v[0]);
     }
 
     #[test]
     fn instruction_8xy1() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0x0F;
         c.v[0] = 0xF0;
-        c.process_opcode(0x8011);
+        c.execute(0x8011);
         assert_eq!(0xFF, c.v[0]);
     }
 
     #[test]
     fn instruction_8xy2() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0x0F;
         c.v[0] = 0xF0;
-        c.process_opcode(0x8012);
+        c.execute(0x8012);
         assert_eq!(0x00, c.v[0]);
     }
 
     #[test]
     fn instruction_8xy3() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0x0F;
         c.v[0] = 0xF0;
-        c.process_opcode(0x8013);
+        c.execute(0x8013);
         assert_eq!(0xFF, c.v[0]);
     }
 
     #[test]
     fn instruction_8xy4() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0xFF;
         c.v[1] = 0x02;
-        c.process_opcode(0x8014);
+        c.execute(0x8014);
         assert_eq!(0x01, c.v[0]);
         assert_eq!(0x01, c.v[0xF]); // Carry
-        c.process_opcode(0x8014);
+        c.execute(0x8014);
         assert_eq!(0x03, c.v[0]);
         assert_eq!(0x00, c.v[0xF]); // Carry
     }
 
     #[test]
     fn instruction_8xy5() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0x01;
         c.v[1] = 0x02;
-        c.process_opcode(0x8015);
+        c.execute(0x8015);
         assert_eq!(0xFF, c.v[0]);
         assert_eq!(0x00, c.v[0xF]); // Carry
-        c.process_opcode(0x8015);
+        c.execute(0x8015);
         assert_eq!(0xFD, c.v[0]);
         assert_eq!(0x01, c.v[0xF]); // No carry
     }
 
     #[test]
     fn instruction_8xy6() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[1] = 0xFF;
-        c.process_opcode(0x8016);
+        c.execute(0x8016);
         assert_eq!(127, c.v[0]);
         assert_eq!(255, c.v[1]);
         assert_eq!(0x00, c.v[0xF]);
 
         c.v[0] = 0x03;
         c.v[1] = 0x02;
-        c.process_opcode(0x8016);
+        c.execute(0x8016);
         assert_eq!(0x01, c.v[0]);
         assert_eq!(0x01, c.v[0xF]);
     }
 
     #[test]
     fn instruction_8xy7() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0x01;
         c.v[1] = 0x00;
 
-        c.process_opcode(0x8017);
+        c.execute(0x8017);
         assert_eq!(0xFF, c.v[0]);
         assert_eq!(0x00, c.v[0xF]);
 
         c.v[0] = 0x01;
         c.v[1] = 0x02;
-        c.process_opcode(0x8017);
+        c.execute(0x8017);
         assert_eq!(0x01, c.v[0]);
         assert_eq!(0x01, c.v[0xF]);
 
@@ -532,60 +538,58 @@ mod test {
 
     #[test]
     fn instruction_8xye() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
 
         c.v[0] = 255;
         c.v[1] = 64;
-        c.process_opcode(0x801E);
+        c.execute(0x801E);
         assert_eq!(128, c.v[0]);
         assert_eq!(0x01, c.v[0xF]);
     }
 
     #[test]
     fn instruction_9xy0() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
 
         c.v[0] = 0xFF;
         c.v[1] = 0xFF;
-        c.process_opcode(0x9010);
+        c.execute(0x9010);
         assert_eq!(0x202, c.pc);
 
         c.v[1] = 0xFE;
-        c.process_opcode(0x9010);
+        c.execute(0x9010);
         assert_eq!(0x206, c.pc);
     }
 
     #[test]
     fn instruction_annn() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
 
         assert_eq!(0x000, c.i);
-        c.process_opcode(0xafff);
+        c.execute(0xafff);
         assert_eq!(0xfff, c.i);
     }
 
     #[test]
     fn instruction_bnnn() {
-        let mut c = Chip8::new();
-        c.reset();
-
+        let mut c = Chip8::new_with_state();
         c.v[0] = 0x0E;
-        c.process_opcode(0xb000);
+        c.execute(0xb000);
         assert_eq!(0x00E, c.pc);
     }
 
     #[test]
     fn instruction_cxyn() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
 
-        c.process_opcode(0xc000); // Should always produce zero.
+
+        c.execute(0xc000); // Should always produce zero.
         assert_eq!(0x00, c.v[0]);
         
-        c.process_opcode(0xc0FF);
+        c.execute(0xc0FF);
         let valid_range = 0..255;
         assert!(valid_range.contains(&c.v[0]));
     }
@@ -598,34 +602,34 @@ mod test {
 
     #[test]
     fn instruction_ex9e() {
-        let mut c = Chip8::new();
-        c.reset();
-        c.io.keys[0] = true;
-        c.process_opcode(0xE09E);
+        let mut c = Chip8::new_with_state();
+
+        c.keys[0] = true;
+        c.execute(0xE09E);
         assert_eq!(0x204, c.pc); // Jump
-        c.io.keys[0] = false;
-        c.process_opcode(0xE09E);
+        c.keys[0] = false;
+        c.execute(0xE09E);
         assert_eq!(0x206, c.pc); // No jump
     }
 
     #[test]
     fn instruction_exa1() {
-        let mut c = Chip8::new();
-        c.reset();
-        c.io.keys[0] = true;
-        c.process_opcode(0xE0A1);
+        let mut c = Chip8::new_with_state();
+
+        c.keys[0] = true;
+        c.execute(0xE0A1);
         assert_eq!(0x202, c.pc); // No jump
-        c.io.keys[0] = false;
-        c.process_opcode(0xE0A1);
+        c.keys[0] = false;
+        c.execute(0xE0A1);
         assert_eq!(0x206, c.pc); // Jump
     }
 
     #[test]
     fn instruction_fx07() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.dt = 0xFF;
-        c.process_opcode(0xF007);
+        c.execute(0xF007);
         assert_eq!(0xFF - 1, c.v[0]); // Already ticked once
     }
 // FX0A 	Wait for a keypress and store the result in register VX
@@ -635,54 +639,54 @@ mod test {
     }
     #[test]
     fn instruction_fx15() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0xFF;
 
-        c.process_opcode(0xf015);
+        c.execute(0xf015);
 
         assert_eq!(0xFF, c.dt);
     }
 
     #[test]
     fn instruction_fx18() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0xFF;
 
-        c.process_opcode(0xf018);
+        c.execute(0xf018);
 
         assert_eq!(0xFF, c.st);
     }
 
     #[test]
     fn instruction_fx1e() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 15;
         c.i = 15;
 
-        c.process_opcode(0xf01e);
+        c.execute(0xf01e);
 
         assert_eq!(30, c.i);
     }
 
     #[test]
     fn instruction_fx29() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0xF;
-        c.process_opcode(0xf029);
+        c.execute(0xf029);
 
         assert_eq!(0xF * 5, c.i);
     }
 
     #[test]
     fn instruction_fx33() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
         c.v[0] = 0xFF;
-        c.process_opcode(0xf033);
+        c.execute(0xf033);
 
         let index = c.i as usize;
         assert_eq!(2, c.memory[index]);
@@ -692,8 +696,8 @@ mod test {
 
     #[test]
     fn instruction_fx55() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+
 
         let base_address = 0x200;
         c.i = base_address;
@@ -702,7 +706,7 @@ mod test {
             c.v[i] = 0xEE;
         }
 
-        c.process_opcode(0xfF55);
+        c.execute(0xfF55);
 
         for i in 0..=0xF {
             assert_eq!(0xEE, c.memory[(base_address + i) as usize]);
@@ -713,8 +717,8 @@ mod test {
 
     #[test]
     fn instruction_fx65() {
-        let mut c = Chip8::new();
-        c.reset();
+        let mut c = Chip8::new_with_state();
+       
 
         let base_address = 0x200;
         c.i = base_address;
@@ -723,7 +727,7 @@ mod test {
             c.memory[(base_address + i) as usize] = 0xFF;
         }
 
-        c.process_opcode(0xfF65);
+        c.execute(0xfF65);
 
         for i in 0..=0xF {
             assert_eq!(0xFF, c.v[i]);
