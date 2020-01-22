@@ -1,8 +1,6 @@
-use rand::Rng;
-
 use std::fs::File;
 use std::io::prelude::*;
-
+use rand::Rng;
 use crate::io::{WIDTH, HEIGHT};
 
 pub struct Chip8 {
@@ -22,13 +20,12 @@ pub struct Chip8 {
     dt: u8,
     // sound timer
     st: u8,
-    // keyboard
+    // internal keyboard state
     pub keys: [bool; 16],
-    // display
+    // internal display state
     pub framebuffer: [bool; WIDTH * HEIGHT],
     // draw flag
     pub should_draw: bool,
-
 }
 
 impl Chip8 {
@@ -79,7 +76,6 @@ impl Chip8 {
     }
 
     fn execute(&mut self, opcode: u16) {
-        // println!{"Processing: {:#02x}", opcode};
         let x = ((opcode & 0x0F00) >> 8) as usize;
         let y = ((opcode & 0x00F0) >> 4) as usize;
         let vx = self.v[x];
@@ -221,6 +217,7 @@ impl Chip8 {
             // Set VF to 01 if any set pixels are changed to unset, and 00 otherwise
             (0xD, _, _, _) => {
                 self.v[0xF] = 0; // Never forget :(
+               
                 let range = (self.i as usize)..(self.i + n as u16) as usize;
                 let sprite_data: &[u8] = &self.memory[range];
 
@@ -340,7 +337,7 @@ mod test {
 
     #[test]
     fn init() {
-        let mut c = Chip8::new_with_state();
+        let c = Chip8::new_with_state();
 
         assert_eq!(0x200, c.pc);
         assert_eq!(4096, c.memory.len());
@@ -635,7 +632,10 @@ mod test {
 // FX0A 	Wait for a keypress and store the result in register VX
     #[test]
     fn instruction_fx0a() {
-        assert_eq!(1, 2);
+        let mut c = Chip8::new_with_state();
+        c.keys[0xF] = true;
+        c.execute(0xF30A);
+        assert_eq!(0xF, c.v[0x3]);
     }
     #[test]
     fn instruction_fx15() {

@@ -27,8 +27,8 @@ impl Io {
         }
     }
 
-    pub fn setup(&mut self) {
-        self.window.limit_update_rate(Some(std::time::Duration::from_micros(1660))); // 600FPS
+    pub fn setup(&mut self, update_rate: u64) {
+        self.window.limit_update_rate(Some(std::time::Duration::from_micros(update_rate)));
     }
 
     pub fn draw(&mut self, display: &[bool]) {
