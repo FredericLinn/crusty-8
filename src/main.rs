@@ -12,9 +12,11 @@ struct Settings {
     #[structopt(short, long, parse(from_os_str))]
     /// Specifies a path to a chip-8 rom
     path: std::path::PathBuf,
+
     #[structopt(short, long, default_value = "1660")]
     /// Specifies the MAXIMUM refresh rate in microseconds, see --authentic-drawing
     update_rate: u64,
+
     /// Draws only when the actual instruction was executed
     #[structopt(short, long = "authentic")]
     authentic_drawing: bool,
