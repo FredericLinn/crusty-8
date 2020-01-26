@@ -1,7 +1,6 @@
 # Crusty-8
 
-![A sirpinksi triangle drawn by the interpreter](sirpinski-sergey-naydenov.png "Sirpinski triangle
-by Sergey Neydenov")
+![A black and white maze drawn by the interpreter](maze-david-winter.png "Maze Demo by David Winter")
 
 Crusty-8 is a... you guessed it! It's a [Chip-8](https://en.wikipedia.org/wiki/Chip-8) interpreter.
 It can handle 35 different instructions, contains a whopping 4Kb of RAM (that's 4096 bytes!)
